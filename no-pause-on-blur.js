@@ -1,16 +1,13 @@
 // ==UserScript==
-// @name         防止视频因失焦和弹窗暂停
+// @name         防止视频因失焦和弹窗而被暂停
 // @namespace    http://tampermonkey.net/
-// @version      0.3
-// @description  移除鼠标离开、失焦、隐藏时的暂停，同时检测特定按钮，防止弹窗造成的暂停；策略2也使用confirmTexts列表匹配按钮
+// @version      0.4
+// @description  移除鼠标离开、失焦、隐藏时的暂停，同时检测特定按钮，防止弹窗造成的暂停，同时使窗口保持活跃。
 // @author       H2OMERO
-// @match        https://*
+// @match        https://*/*
 // @grant        none
+// @run-at       document-start
 // ==/UserScript==
-
-document.addEventListener('visibilitychange', e => e.stopImmediatePropagation(), true);
-window.addEventListener('blur', e => e.stopImmediatePropagation(), true);
-document.addEventListener('mouseout', e => e.stopImmediatePropagation(), true);
 
 (function() {
     'use strict';
@@ -22,20 +19,48 @@ document.addEventListener('mouseout', e => e.stopImmediatePropagation(), true);
     // 策略2：弹窗内需要包含的特征文字，满足其一即触发内部搜索
     const textHints = ['视频已暂停', '提示'];
 
+    // 页面活跃伪装
+    function overrideVisibilityAPI() {
+        try {
+            // 始终显示为活跃
+            Object.defineProperty(document, 'hidden', {
+                get: () => false,
+                configurable: false,
+                enumerable: true
+            });
+        } catch(e) {}
+
+        try {
+            // 始终显示为可视状态
+            Object.defineProperty(document, 'visibilityState', {
+                get: () => 'visible',
+                configurable: false,
+                enumerable: true
+            });
+        } catch(e) {}
+
+        try {
+            // 始终认为窗口拥有焦点
+            document.hasFocus = () => true;
+        } catch(e) {}
+    }
+    overrideVisibilityAPI();
+
+    // 在捕获阶段阻止 visibilitychange / blur / mouseout 事件传播
+    const blockedEvents = ['visibilitychange', 'blur', 'mouseout'];
+    blockedEvents.forEach(evt => {
+        document.addEventListener(evt, e => e.stopImmediatePropagation(), true);
+        window.addEventListener(evt, e => e.stopImmediatePropagation(), true);
+    });
+
+
+    // 关闭暂停弹窗
     let pendingClick = false;
 
-    // 生成 500~800ms 之间的随机延迟（毫秒）
     function randomDelay() {
-        return Math.floor(Math.random() * 301) + 500;
+        return Math.floor(Math.random() * 301) + 500;    // 500~800延迟点击ms
     }
 
-    /**
-     * 尝试通过指定文本触发按钮点击
-     * @param {HTMLElement} btn - 要点击的按钮
-     * @param {string} btnText  - 按钮文本
-     * @param {string} reason   - 触发原因（用于日志）
-     * @returns {boolean} 是否已安排点击
-     */
     function tryClickConfirmButton(btn, btnText, reason) {
         if (pendingClick) return false;
         pendingClick = true;
@@ -48,34 +73,28 @@ document.addEventListener('mouseout', e => e.stopImmediatePropagation(), true);
         return true;
     }
 
-    /**
-     * 主检测与点击逻辑
-     * @returns {boolean} 是否触发了一次点击安排
-     */
     function clickConfirm() {
-        if (pendingClick) return false; // 避免并发
+        if (pendingClick) return false;
 
-        // 策略1: 全文档查找文本在 confirmTexts 中的按钮/链接
+        // 策略1：全文档搜索文本匹配的按钮/链接
         const allButtons = document.querySelectorAll('button, [role="button"], a');
         for (const btn of allButtons) {
             const text = btn.textContent.trim();
-            if (confirmTexts.includes(text)) {
-                return tryClickConfirmButton(btn, text, '文本匹配');
+            if (CONFIRM_TEXTS.includes(text)) {
+                return tryClickConfirmButton(btn, text, '直接文本匹配');
             }
         }
 
-        // 策略2: 查找包含特征文字的容器，内部搜索匹配 confirmTexts 的按钮
-        for (const hint of textHints) {
+        // 策略2：在包含特征文字的容器内搜索匹配按钮
+        for (const hint of HINT_TEXTS) {
             const containers = document.querySelectorAll('div, section, dialog, [role="dialog"]');
             for (const container of containers) {
-                // 跳过不包含特征文字的容器
                 if (!container.innerText.includes(hint)) continue;
 
-                // 在容器内部查找所有可能按钮，匹配 confirmTexts
-                const innerButtons = container.querySelectorAll('button, [role="button"], a');
-                for (const btn of innerButtons) {
+                const innerBtns = container.querySelectorAll('button, [role="button"], a');
+                for (const btn of innerBtns) {
                     const btnText = btn.textContent.trim();
-                    if (confirmTexts.includes(btnText)) {
+                    if (CONFIRM_TEXTS.includes(btnText)) {
                         return tryClickConfirmButton(btn, btnText, `弹窗特征“${hint}”内部匹配`);
                     }
                 }
@@ -85,18 +104,29 @@ document.addEventListener('mouseout', e => e.stopImmediatePropagation(), true);
         return false;
     }
 
-    // 使用 MutationObserver 实时监听 DOM 变化
-    const observer = new MutationObserver(() => {
-        clickConfirm();
-    });
+    function startObserver() {
+        if (!document.body) {
+            requestAnimationFrame(startObserver);   // 等待 body 生成
+            return;
+        }
 
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+        const observer = new MutationObserver(() => clickConfirm());
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
 
-    // 作为兜底，每隔5秒也扫描一次
-    setInterval(clickConfirm, 5000);
+        // 定期兜底扫描（防止某些动态场景遗漏）
+        setInterval(clickConfirm, 5000);
 
-    console.log('no-pause-on-blur 脚本已启动 (v0.3)');
+        console.log('[no-pause-on-blur] 脚本已启动（活跃伪装+弹窗自动关闭）');
+    }
+
+    // 根据当前文档状态决定启动时机
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', startObserver);
+    } else {
+        startObserver();
+    }
+
 })();
