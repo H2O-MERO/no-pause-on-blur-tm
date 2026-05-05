@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         防止视频因失焦和弹窗而被暂停
 // @namespace    http://tampermonkey.net/
-// @version      0.4
+// @version      0.5
 // @description  移除鼠标离开、失焦、隐藏时的暂停，同时检测特定按钮，防止弹窗造成的暂停，同时使窗口保持活跃。
 // @author       H2OMERO
 // @match        https://*/*
@@ -14,10 +14,10 @@
 
     // ---- 可配置常量 ----
     // 策略1 & 策略2 共同使用的按钮文本列表（精确匹配）
-    const confirmTexts = ['确定', '我知道了'];
+    const CONFIRM_TEXTS = ['确定', '我知道了'];
 
     // 策略2：弹窗内需要包含的特征文字，满足其一即触发内部搜索
-    const textHints = ['视频已暂停', '提示'];
+    const HINT_TEXTS = ['视频已暂停', '提示'];
 
     // 页面活跃伪装
     function overrideVisibilityAPI() {
@@ -58,7 +58,8 @@
     let pendingClick = false;
 
     function randomDelay() {
-        return Math.floor(Math.random() * 301) + 500;    // 500~800延迟点击ms
+        // 500~800延迟点击ms
+        return Math.floor(Math.random() * 301) + 500;
     }
 
     function tryClickConfirmButton(btn, btnText, reason) {
@@ -106,7 +107,7 @@
 
     function startObserver() {
         if (!document.body) {
-            requestAnimationFrame(startObserver);   // 等待 body 生成
+            requestAnimationFrame(startObserver);
             return;
         }
 
