@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         防止视频因失焦和弹窗而被暂停
 // @namespace    http://tampermonkey.net/
-// @version      0.5
+// @version      0.6
 // @description  移除鼠标离开、失焦、隐藏时的暂停，同时检测特定按钮，防止弹窗造成的暂停，同时使窗口保持活跃。
 // @author       H2OMERO
 // @match        https://*/*
@@ -62,6 +62,22 @@
         return Math.floor(Math.random() * 301) + 500;
     }
 
+    // 新增：自动寻找并播放视频
+    function resumeAllVideos() {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(video => {
+            if (video.paused) {
+                video.play().catch(err => {
+                    // 个别环境可能不允许自动播放，静音后重试
+                    if (err.name === 'NotAllowedError') {
+                        video.muted = true;
+                        video.play().catch(() => {});
+                    }
+                });
+            }
+        });
+    }
+
     function tryClickConfirmButton(btn, btnText, reason) {
         if (pendingClick) return false;
         pendingClick = true;
@@ -69,6 +85,9 @@
         setTimeout(() => {
             btn.click();
             console.log(`[自动点击] 已点击“${btnText}”按钮（${reason}），延迟${delay}ms`);
+            // 点击后延迟寻找视频并播放（多次延迟以应对弹窗关闭动画或视频元素延迟加载）
+            setTimeout(resumeAllVideos, 500);
+            setTimeout(resumeAllVideos, 2000);
             pendingClick = false;
         }, delay);
         return true;
